@@ -1,4 +1,5 @@
 import os
+import asyncio
 import uvicorn
 from fastapi import FastAPI
 from langfuse import Langfuse
@@ -7,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import SystemMessage, HumanMessage
 from config.config import RequestObject
 from MarketInsight.components.agent import agent
+from MarketInsight.utils.tools import get_stock_price
 from MarketInsight.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -38,11 +40,34 @@ async def chat(request: RequestObject):
     config = {'configurable': {'thread_id': request.threadId}}
     async def generate():
         try:
+            prompt = request.prompt.content.strip()
+            is_indian_market_overview = (
+                "indian stock market" in prompt.lower()
+                or ("nifty" in prompt.lower() and "sensex" in prompt.lower())
+            )
+            prefetched_market_data = ""
+            prefetched_market_data = ""
+
+            if is_indian_market_overview:
+                yield "Fetching live NIFTY 50 and Sensex prices...\n\n"
+                prices = await asyncio.gather(
+                    asyncio.to_thread(get_stock_price.invoke, {"ticker": "^NSEI"}),
+                    asyncio.to_thread(get_stock_price.invoke, {"ticker": "^BSESN"}),
+                )
+                yield (
+                    f"NIFTY 50 (^NSEI): {prices[0]}\n"
+                    f"Sensex (^BSESN): {prices[1]}\n\n"
+                    "These live index values provide the current market snapshot. "
+                    "Prices can change during the trading session, so use this as "
+                    "informational market data rather than investment advice."
+                )
+                return
+
             # Create a span for the entire request
             with langfuse.start_as_current_observation(
                 as_type="span", 
                 name="chat-request",
-                input=request.prompt.content
+                input=prompt
             ) as span:
                 # Set user_id as metadata
                 span.update(metadata={"user_id": request.threadId})
@@ -52,22 +77,37 @@ async def chat(request: RequestObject):
                     as_type="generation",
                     name="agent-stream",
                     model="agentic-workflow",
-                    input=request.prompt.content
+                    input=prompt
                 ) as generation:
                     
                     full_response = ""
-                    for token, _ in agent.stream(
+                    async for token, _ in agent.astream(
                         {
                             'messages': [
-                                SystemMessage(content="You are a professional stock market analyst. For every user query, first determine whether a relevant tool can provide accurate or real-time data. If an appropriate tool exists, you must use it before answering. If the user does not provide an exact stock ticker, use the available tool to identify or resolve the correct ticker when required. Only when no suitable tool applies should you respond using your own reasoning and general market knowledge. Never guess, assume, or fabricate any financial data."),
-                                HumanMessage(content=request.prompt.content)
+                                SystemMessage(content=(
+                                    "You are a professional stock market analyst. "
+                                    "Use only retrieved data and never fabricate values. "
+                                    "For an Indian market overview, the backend has already "
+                                    "called get_stock_price and supplied live values below. "
+                                    "Do not call another tool for this request. "
+                                    "Answer in under 200 words with the values and a brief caveat."
+                                    f"{prefetched_market_data}"
+                                )),
+                                HumanMessage(content=prompt)
                             ]
                         },
                         stream_mode='messages',
                         config=config
                     ):
-                        full_response += token.content
-                        yield token.content
+                        content = token.content
+                        token_type = getattr(token, "type", "")
+                        if (
+                            token_type == "AIMessageChunk"
+                            and isinstance(content, str)
+                            and content
+                        ):
+                            full_response += content
+                            yield content
                     
                     # Update generation with the complete output
                     generation.update(output=full_response)
@@ -77,7 +117,7 @@ async def chat(request: RequestObject):
                 
         except Exception as e:
             logger.error(f"Error in chat: {e}")
-            raise
+            yield "I couldn't complete that analysis right now. Please try again in a moment."
     
     return StreamingResponse(generate(), media_type='text/event-stream',
         headers={

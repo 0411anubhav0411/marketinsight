@@ -25,7 +25,7 @@ Market Insight leverages advanced AI agents to deliver real-time stock market in
 ### Prerequisites
 - Python 3.x
 - Node.js (for frontend)
-- OpenAI API key
+- Ollama (free local AI) or a compatible hosted AI provider
 
 ### Installation
 
@@ -34,13 +34,29 @@ Market Insight leverages advanced AI agents to deliver real-time stock market in
    ```bash
    pip install -r requirements.txt
    ```
-3. Set up environment variables in `.env` file
+3. For a free local setup, install Ollama, download a tool-capable model,
+   and create `.env` from `.env.example`:
+   ```bash
+   ollama pull llama3.1:8b
+   ```
+   Keep `.env` local and never commit it. The default configuration uses
+   Ollama at `http://localhost:11434/v1` and does not require an API key.
+
+   For a deployed backend such as Render, use Ollama Cloud instead because
+   a hosted server cannot access Ollama running on your computer. Set these
+   environment variables in the hosting dashboard:
+   ```
+   AI_PROVIDER=ollama
+   AI_MODEL=<an Ollama Cloud model>
+   AI_BASE_URL=https://ollama.com/v1
+   OLLAMA_API_KEY=<your Ollama API key>
+   ```
 4. Install frontend dependencies:
    ```bash
    cd frontend
    npm install
    ```
-5. Run the backend server:
+5. From the `MarketInsight` project directory, run the backend server:
    ```bash
    python main.py
    ```

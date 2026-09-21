@@ -1,281 +1,178 @@
 import './App.css'
-import { C1Chat, ThemeProvider } from '@thesysai/genui-sdk'
-import '@crayonai/react-ui/styles/index.css'
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState } from 'react'
+import type { FormEvent } from 'react'
 
-// Recommendation data
 const RECOMMENDATIONS = [
-  {
-    icon: '📊',
-    text: "Analyze the Indian stock market with today's key signals"
-  },
-  {
-    icon: '🧭',
-    text: "Analyse Conditions of Large, Mid and Small Cap in Indian Market"
-  },
-  {
-    icon: '📰',
-    text: 'Track major stock market events shaping investor sentiment'
-  },
-  {
-    icon: '🌍',
-    text: 'How global news connects with Indian market movements'
-  }
+  { icon: '📈', title: 'Today’s key signals', text: "Analyze today's Indian stock market using NIFTY 50 (^NSEI) and Sensex (^BSESN) signals" },
+  { icon: '📊', title: 'Market segments', text: 'Analyse conditions of large, mid and small cap stocks in the Indian market' },
+  { icon: '📰', title: 'Market events', text: 'Track major stock market events shaping investor sentiment' },
+  { icon: '🌍', title: 'Global impact', text: 'How global news connects with Indian market movements' },
 ]
 
-// Custom hook for sending messages programmatically
-function useMessageSender() {
-  const sendMessage = useCallback((text: string) => {
-    // Set flag to prevent sidebar toggle
-    document.body.setAttribute('data-programmatic-interaction', 'true')
-
-    // Small delay to ensure C1Chat is ready
-    setTimeout(() => {
-      const inputElement = document.querySelector(
-        'textarea, input[type="text"], [contenteditable="true"]'
-      ) as HTMLTextAreaElement | HTMLInputElement | HTMLElement
-
-      if (inputElement) {
-        // Set the input value
-        if ('value' in inputElement) {
-          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-            inputElement instanceof HTMLTextAreaElement
-              ? window.HTMLTextAreaElement.prototype
-              : window.HTMLInputElement.prototype,
-            'value'
-          )?.set
-
-          if (nativeInputValueSetter) {
-            nativeInputValueSetter.call(inputElement, text)
-          }
-
-          inputElement.dispatchEvent(new Event('input', { bubbles: true }))
-          inputElement.dispatchEvent(new Event('change', { bubbles: true }))
-        } else if (inputElement.isContentEditable) {
-          inputElement.textContent = text
-          inputElement.dispatchEvent(new Event('input', { bubbles: true }))
-        }
-
-        // Don't focus input to prevent keyboard popup on mobile
-        // This prevents the white space issue at the bottom
-
-        // Send the message
-        setTimeout(() => {
-          const sendButton = document.querySelector(
-            'button[type="submit"], button[aria-label*="send" i]'
-          ) as HTMLButtonElement
-
-          if (sendButton) {
-            sendButton.click()
-          } else {
-            const form = inputElement.closest('form')
-            if (form) {
-              form.requestSubmit()
-            }
-          }
-
-          // Remove flag after action completes
-          setTimeout(() => {
-            document.body.removeAttribute('data-programmatic-interaction')
-          }, 100)
-        }, 300)
-      } else {
-        document.body.removeAttribute('data-programmatic-interaction')
-      }
-    }, 100)
-  }, [])
-
-  return sendMessage
+type Message = {
+  role: 'user' | 'assistant'
+  content: string
 }
 
-// Main App Component
+const API_URL = import.meta.env.VITE_API_URL || '/api/chat'
+
+async function readStream(response: Response, onText: (text: string) => void) {
+  if (!response.body) {
+    throw new Error('The server returned an empty response.')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (value) {
+      onText(decoder.decode(value, { stream: !done }))
+    }
+    if (done) break
+  }
+}
+
 function App() {
-  const [showRecommendations, setShowRecommendations] = useState(true)
-  const [hasMessages, setHasMessages] = useState(false)
-  const sendMessage = useMessageSender()
-  const chatContainerRef = useRef<HTMLDivElement>(null)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [input, setInput] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState('')
 
-  const handleRecommendationClick = useCallback((text: string) => {
-    setShowRecommendations(false)
-    setHasMessages(true)
-    sendMessage(text)
-  }, [sendMessage])
+  const sendMessage = async (content: string) => {
+    const prompt = content.trim()
+    if (!prompt || isLoading) return
 
-  // Watch for user input to hide recommendations
-  useEffect(() => {
-    const handleInput = () => {
-      // Hide recommendations as soon as user starts typing
-      if (showRecommendations) {
-        setHasMessages(true)
-        setShowRecommendations(false)
-      }
-    }
+    setInput('')
+    setError('')
+    setMessages((current) => [...current, { role: 'user', content: prompt }])
+    setIsLoading(true)
 
-    const handleSubmit = () => {
-      // Ensure recommendations stay hidden after message is sent
-      setHasMessages(true)
-      setShowRecommendations(false)
-    }
+    const assistantIndex = messages.length + 1
+    setMessages((current) => [...current, { role: 'assistant', content: '' }])
 
-    // Start monitoring after a delay to ensure C1Chat is mounted
-    const timeout = setTimeout(() => {
-      // Monitor input elements
-      const inputElement = document.querySelector('textarea, input[type="text"]')
-      if (inputElement) {
-        inputElement.addEventListener('input', handleInput)
-        inputElement.addEventListener('keydown', handleInput)
-      }
-
-      // Monitor form submissions
-      const form = document.querySelector('form')
-      if (form) {
-        form.addEventListener('submit', handleSubmit)
-      }
-
-      // Also monitor for any button clicks that might send messages
-      document.addEventListener('click', (e) => {
-        const target = e.target as HTMLElement
-        if (
-          target.matches('button[type="submit"], button[aria-label*="send" i]') ||
-          target.closest('button[type="submit"], button[aria-label*="send" i]')
-        ) {
-          handleSubmit()
-        }
-      })
-    }, 500)
-
-    return () => {
-      clearTimeout(timeout)
-      const inputElement = document.querySelector('textarea, input[type="text"]')
-      if (inputElement) {
-        inputElement.removeEventListener('input', handleInput)
-        inputElement.removeEventListener('keydown', handleInput)
-      }
-      const form = document.querySelector('form')
-      if (form) {
-        form.removeEventListener('submit', handleSubmit)
-      }
-    }
-  }, [showRecommendations])
-
-  // Watch for new chat events to show recommendations again
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement
-      if (
-        target.textContent?.toLowerCase().includes('new chat') ||
-        target.getAttribute('aria-label')?.toLowerCase().includes('new chat')
-      ) {
-        // Reset states to show recommendations again
-        setHasMessages(false)
-        setTimeout(() => setShowRecommendations(true), 100)
-
-        // Close menu/sidebar on mobile after clicking New Chat
-        setTimeout(() => {
-          // Try to find and click the menu close button or backdrop
-          const menuButton = document.querySelector('[aria-label*="menu" i], [aria-label*="close" i]') as HTMLElement
-          const backdrop = document.querySelector('[class*="backdrop" i], [class*="overlay" i]') as HTMLElement
-
-          if (menuButton && window.innerWidth < 768) {
-            menuButton.click()
-          } else if (backdrop && window.innerWidth < 768) {
-            backdrop.click()
-          }
-        }, 200)
-      }
-    }
-
-    document.addEventListener('click', handleClick)
-    return () => document.removeEventListener('click', handleClick)
-  }, [])
-
-  // Inject recommendations into C1Chat DOM
-  useEffect(() => {
-    if (!showRecommendations || hasMessages) {
-      const injected = document.querySelector('.recommendations-overlay')
-      if (injected) {
-        injected.remove()
-      }
-      return
-    }
-
-    const injectRecommendations = () => {
-      if (document.querySelector('.recommendations-overlay')) {
-        return
-      }
-
-      const inputElement = document.querySelector('textarea, input[type="text"]')
-      if (!inputElement) {
-        return
-      }
-
-      const targetContainer = inputElement.closest('[class*="container"], [class*="wrapper"], form, div') as HTMLElement
-      if (!targetContainer) {
-        return
-      }
-
-      // Create overlay container
-      const overlay = document.createElement('div')
-      overlay.className = 'recommendations-overlay'
-
-      const container = document.createElement('div')
-      container.className = 'recommendations-container'
-
-      RECOMMENDATIONS.forEach((rec) => {
-        const box = document.createElement('div')
-        box.className = 'recommendation-box'
-        box.setAttribute('role', 'button')
-        box.setAttribute('tabindex', '0')
-
-        const icon = document.createElement('span')
-        icon.className = 'recommendation-icon'
-        icon.textContent = rec.icon
-
-        const text = document.createElement('p')
-        text.className = 'recommendation-text'
-        text.textContent = rec.text
-
-        box.appendChild(icon)
-        box.appendChild(text)
-
-        box.addEventListener('click', (e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          e.stopImmediatePropagation()
-          handleRecommendationClick(rec.text)
-        }, { capture: true })
-
-        container.appendChild(box)
+    try {
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: {
+            content: prompt,
+            id: crypto.randomUUID(),
+            role: 'user',
+          },
+          threadId: crypto.randomUUID(),
+          responseId: crypto.randomUUID(),
+        }),
       })
 
-      overlay.appendChild(container)
-      targetContainer.insertAdjacentElement('beforebegin', overlay)
-    }
-
-    const timeout1 = setTimeout(injectRecommendations, 500)
-    const timeout2 = setTimeout(injectRecommendations, 1000)
-
-    return () => {
-      clearTimeout(timeout1)
-      clearTimeout(timeout2)
-      const injected = document.querySelector('.recommendations-overlay')
-      if (injected) {
-        injected.remove()
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}.`)
       }
+
+      await readStream(response, (text) => {
+        setMessages((current) =>
+          current.map((message, index) =>
+            index === assistantIndex
+              ? { ...message, content: message.content + text }
+              : message,
+          ),
+        )
+      })
+    } catch (requestError) {
+      const message = requestError instanceof Error
+        ? requestError.message
+        : 'Unable to generate a response.'
+      setError(message)
+      setMessages((current) =>
+        current.filter((_, index) => index !== assistantIndex),
+      )
+    } finally {
+      setIsLoading(false)
     }
-  }, [showRecommendations, hasMessages, handleRecommendationClick])
+  }
+
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault()
+    void sendMessage(input)
+  }
 
   return (
-    <div className="app-container" ref={chatContainerRef}>
-      <ThemeProvider mode="dark">
-        <C1Chat
-          apiUrl="https://marketinsight-skgl.onrender.com/api/chat"
-          agentName="Market Insight"
-          logoUrl="/icon.png"
-          formFactor="full-page"
-        />
-      </ThemeProvider>
-    </div>
+    <main className="app-container">
+      <aside className="sidebar">
+        <div className="brand">
+          <img src="/icon.png" alt="" className="chat-logo" />
+          <div>
+            <strong>Market Insight</strong>
+            <span>AI market intelligence</span>
+          </div>
+        </div>
+        <button className="new-chat" onClick={() => { setMessages([]); setError('') }}>
+          <span>＋</span> New analysis
+        </button>
+        <div className="sidebar-note">
+          <span className="status-dot" />
+          Local AI assistant online
+        </div>
+        <p className="sidebar-footer">Powered by Yahoo Finance data</p>
+      </aside>
+
+      <div className="chat-panel">
+        <header className="chat-header">
+          <div>
+            <span className="eyebrow">MARKET RESEARCH ASSISTANT</span>
+            <h1>Understand the market with confidence</h1>
+          </div>
+          <div className="live-badge"><span className="status-dot" /> Live analysis</div>
+        </header>
+
+        <section className="chat-content" aria-live="polite">
+        {messages.length === 0 && (
+          <div className="welcome">
+            <div className="welcome-icon">✦</div>
+            <p className="eyebrow">GOOD MORNING, INVESTOR</p>
+            <h2>What would you like to explore?</h2>
+            <p className="welcome-copy">Get clear, data-backed insights on Indian stocks, indices, and market trends.</p>
+            <div className="recommendations-container">
+              {RECOMMENDATIONS.map((recommendation) => (
+                <button
+                  className="recommendation-box"
+                  key={recommendation.text}
+                  onClick={() => void sendMessage(recommendation.text)}
+                  disabled={isLoading}
+                >
+                  <span className="recommendation-icon">{recommendation.icon}</span>
+                  <span><strong>{recommendation.title}</strong><small>{recommendation.text}</small></span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {messages.map((message, index) => (
+          <article className={`message message-${message.role}`} key={`${message.role}-${index}`}>
+            <strong>{message.role === 'user' ? 'You' : 'Market Insight'}</strong>
+            <p>{message.content || (isLoading ? 'Analyzing market data…' : '')}</p>
+          </article>
+        ))}
+        </section>
+
+        {error && <p className="chat-error">{error}</p>}
+
+        <form className="chat-form" onSubmit={handleSubmit}>
+          <textarea
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            placeholder="Ask about stocks, indices, or market trends..."
+            disabled={isLoading}
+            rows={1}
+          />
+          <button type="submit" disabled={isLoading || !input.trim()}>
+            {isLoading ? 'Analyzing…' : 'Send  ↑'}
+          </button>
+        </form>
+      </div>
+    </main>
   )
 }
 
